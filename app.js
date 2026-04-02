@@ -22,7 +22,7 @@
 // ==========================================
 
 const WEBAPP_URL =
-  "https://script.google.com/macros/s/AKfycbz9LcpvNHLCCRUneMBTzfRLDGaWflofpDjbdI4o0_h0wjOvT3p8BfOTTV58hG-HsoTL7w/exec";
+  "https://script.google.com/macros/s/AKfycbyhqcQZQZxrmh6Zl-qg-5fgXhGose7sZzoStEv62kuAT3uKXTgulO_Y7DfgzGeWHTpD-A/exec";
 const APP_VARIANT = "iza1.0";
 
 const MIN_INSPIRED_ROUNDS = 7;
