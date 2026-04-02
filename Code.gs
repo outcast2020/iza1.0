@@ -102,7 +102,7 @@ var DEFAULT_REPAIR_EVENTS_SHEET_NAME = "repair_events";
 var DEFAULT_TEACHER_NOTES_SHEET_NAME = "teacher_notes";
 var DEFAULT_CONSENT_EVENTS_SHEET_NAME = "consent_events";
 var DEFAULT_CHECKIN_SPREADSHEET_ID = "130CvfT6mwv0gzYQgmrylg4Q0T5xRI918dms8A4yzqO8";
-var DEFAULT_CHECKIN_SHEET_NAME = "";
+var DEFAULT_CHECKIN_SHEET_NAME = "USERS";
 var DEFAULT_PROJECT_VARIANT = "iza1.0";
 
 var QUERY_STOPWORDS = {
@@ -710,8 +710,21 @@ function getCheckinSheet_() {
   var sheetName = String(props.getProperty("IZA_CHECKIN_SHEET_NAME") || DEFAULT_CHECKIN_SHEET_NAME).trim();
   var ss = openSpreadsheetSafely_(spreadsheetId);
   if (!ss) return null;
-  if (sheetName) return ss.getSheetByName(sheetName) || ss.getSheets()[0];
-  return ss.getSheets()[0];
+  if (sheetName) {
+    return (
+      ss.getSheetByName(sheetName) ||
+      ss.getSheetByName("USERS") ||
+      ss.getSheetByName("Users") ||
+      ss.getSheetByName("users") ||
+      ss.getSheets()[0]
+    );
+  }
+  return (
+    ss.getSheetByName("USERS") ||
+    ss.getSheetByName("Users") ||
+    ss.getSheetByName("users") ||
+    ss.getSheets()[0]
+  );
 }
 
 function getProjectVariant_() {
