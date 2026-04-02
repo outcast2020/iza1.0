@@ -35,6 +35,13 @@ const state = {
   municipio: "",
   estadoUF: "", // "BA", "MG", ... ou "INTERNACIONAL"
   origem: "", // "Oficina Cordel 2.0" | "Particular"
+  participantId: "",
+  checkinUserId: "",
+  checkinMatchStatus: "",
+  checkinMatchMethod: "",
+  teacherGroup: "",
+  checkinLookupStatus: "idle", // idle|loading|matched|unmatched|ambiguous|error
+  checkinLookupMessage: "",
 
   presenceKey: null, // "A"|"B"|"C"|"D"|"H"
   presence: null,
@@ -175,6 +182,115 @@ function pushTurn(role, text, meta = {}) {
       ...meta
     }
   });
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function clearResolvedCheckinIdentity(nextEmail = "") {
+  state.email = String(nextEmail || "").trim();
+  state.name = "";
+  state.municipio = "";
+  state.estadoUF = "";
+  state.origem = "";
+  state.participantId = "";
+  state.checkinUserId = "";
+  state.checkinMatchStatus = "";
+  state.checkinMatchMethod = "";
+  state.teacherGroup = "";
+  state.checkinLookupStatus = "idle";
+  state.checkinLookupMessage = "";
+}
+
+function applyResolvedCheckinIdentity(identity) {
+  state.name = String(identity?.name || "").trim();
+  state.email = String(identity?.email || state.email || "").trim();
+  state.municipio = String(identity?.municipio || "").trim();
+  state.estadoUF = normalizeUFOrInternational(identity?.estado || "");
+  state.origem = normalizeOrigem(identity?.origem || "Oficina Cordel 2.0");
+  state.participantId = String(identity?.participantId || "").trim();
+  state.checkinUserId = String(identity?.checkinUserId || "").trim();
+  state.checkinMatchStatus = String(identity?.status || "matched").trim() || "matched";
+  state.checkinMatchMethod = String(identity?.matchMethod || "email").trim() || "email";
+  state.teacherGroup = String(identity?.teacherGroup || "").trim();
+  state.checkinLookupStatus = "matched";
+  state.checkinLookupMessage = "";
+}
+
+function renderWelcomeIdentityStatus() {
+  const status = String(state.checkinLookupStatus || "idle");
+
+  if (status === "loading") {
+    return `<div class="message iza-message">Verificando seu e-mail no check-in...</div>`;
+  }
+
+  if (status === "matched") {
+    const details = [
+      state.municipio ? `Município: ${escapeHtml(state.municipio)}` : "",
+      state.estadoUF ? `Estado: ${escapeHtml(state.estadoUF)}` : "",
+      state.teacherGroup ? `Turma/oficina: ${escapeHtml(state.teacherGroup)}` : ""
+    ].filter(Boolean);
+
+    return `
+      <div class="message iza-message">
+        <strong>Cadastro confirmado.</strong><br>
+        ${escapeHtml(state.name || "Participante")}<br>
+        <span class="iza-copy iza-copy--soft">${escapeHtml(state.email)}</span>
+        ${details.length ? `<div class="iza-copy iza-copy--soft">${details.join(" · ")}</div>` : ""}
+      </div>
+    `;
+  }
+
+  if (status === "unmatched") {
+    return `
+      <div class="message">
+        Não encontrei esse e-mail no check-in. Nesta fase, o acesso ao IZA 1.0 está liberado apenas para e-mails já registrados.
+      </div>
+    `;
+  }
+
+  if (status === "ambiguous") {
+    return `
+      <div class="message">
+        Encontrei mais de um cadastro com esse e-mail no check-in. Vale revisar esse registro antes de seguir.
+      </div>
+    `;
+  }
+
+  if (status === "error") {
+    return `
+      <div class="message">
+        Não consegui consultar o check-in agora. ${escapeHtml(state.checkinLookupMessage || "Tente novamente em instantes.")}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="iza-copy iza-copy--soft">
+      Digite o e-mail usado no check-in para liberar a jornada e trazer seu nome automaticamente.
+    </div>
+  `;
+}
+
+function updateWelcomeIdentityUI() {
+  const identityNode = el("welcomeIdentity");
+  if (identityNode) identityNode.innerHTML = renderWelcomeIdentityStatus();
+
+  const verifyBtn = el("verifyCheckinBtn");
+  if (verifyBtn) {
+    verifyBtn.disabled = state.checkinLookupStatus === "loading" || !isValidEmail(el("userEmail")?.value || "");
+    verifyBtn.textContent = state.checkinLookupStatus === "loading" ? "Verificando..." : "Verificar e-mail";
+  }
+
+  const startBtn = el("startJourneyBtn");
+  if (startBtn) {
+    startBtn.disabled = !(state.checkinLookupStatus === "matched" && state.name && state.participantId && state.checkinUserId);
+  }
 }
 
 // -------------------- UX PATCH HELPERS --------------------
@@ -3420,6 +3536,49 @@ function requestLiteraryGiftViaAppsScript(requestData) {
   });
 }
 
+function requestCheckinIdentityViaJsonp(email) {
+  return new Promise((resolve) => {
+    const callbackName =
+      "__izaCheckinCb_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+    const params = new URLSearchParams({
+      action: "checkin_lookup",
+      callback: callbackName,
+      email: String(email || "").trim()
+    });
+    const script = document.createElement("script");
+    const mountNode = document.body || document.head || document.documentElement;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      if (script.parentNode) script.parentNode.removeChild(script);
+      try {
+        delete window[callbackName];
+      } catch (_) {
+        window[callbackName] = undefined;
+      }
+    };
+
+    window[callbackName] = (data) => {
+      cleanup();
+      resolve(data || { ok: false, status: "error", error: "empty_response" });
+    };
+
+    script.onerror = () => {
+      cleanup();
+      resolve({ ok: false, status: "error", error: "network" });
+    };
+
+    timer = setTimeout(() => {
+      cleanup();
+      resolve({ ok: false, status: "error", error: "timeout" });
+    }, 15000);
+
+    script.src = `${WEBAPP_URL}?${params.toString()}`;
+    mountNode.appendChild(script);
+  });
+}
+
 function requestLiteraryGiftViaJsonp(requestData) {
   return new Promise((resolve) => {
     const callbackName =
@@ -3708,6 +3867,10 @@ function buildRegisterBasePayload(stage) {
     appVariant: APP_VARIANT,
     sessionId: state.sessionId,
     stage, // "init" | "choice" | "final"
+    participantId: state.participantId || "",
+    checkinUserId: state.checkinUserId || "",
+    checkinMatchStatus: state.checkinMatchStatus || "",
+    checkinMatchMethod: state.checkinMatchMethod || "",
     escritor: state.name,
     name: state.name,
     email: state.email,
@@ -3717,6 +3880,9 @@ function buildRegisterBasePayload(stage) {
     stateUF: state.estadoUF,
     origem: state.origem,
     source: state.origem,
+    teacherGroup: state.teacherGroup || "",
+    cohort: state.teacherGroup || "",
+    workshop: state.teacherGroup || "",
 
     trilha: state.trackKey || "",
     trackKey: state.trackKey || "",
@@ -4170,6 +4336,128 @@ window.validateStart = function () {
   safeRegisterInit();
 
   showPresenceTest();
+};
+
+function renderWelcomeScreen(payload, fromHistory = false) {
+  render(
+    renderCardShell(`
+      <div class="iza-top">
+        <div class="iza-top__main">
+          <h2 class="iza-title">IZA no Cordel 2.0</h2>
+          <div class="iza-sub">Perguntar para pensar.</div>
+        </div>
+        <div class="iza-top__side">
+          <div class="iza-chip">Início</div>
+        </div>
+      </div>
+
+      <p class="iza-copy">
+        IZA é uma ancestral de escrita: ela não escreve por você;
+        ela faz perguntas para te ajudar a <strong>pensar, organizar e aprofundar</strong> o que seu texto ainda está pedindo.
+      </p>
+
+      <p class="iza-copy iza-copy--soft">
+        Nesta fase, a entrada do IZA 1.0 está liberada apenas para e-mails já registrados no check-in.
+      </p>
+
+      <div id="welcomeError"></div>
+
+      <input type="email" id="userEmail" class="input-area" placeholder="Seu e-mail" value="${escapeHtml(state.email)}">
+
+      <div class="iza-actions iza-actions--compact">
+        <button class="button" id="verifyCheckinBtn" onclick="verifyCheckinEmail()">Verificar e-mail</button>
+      </div>
+
+      <div id="welcomeIdentity"></div>
+
+      <button class="button" id="startJourneyBtn" onclick="validateStart()" disabled>Começar jornada</button>
+
+      ${renderHistoryNav("")}
+    `)
+  );
+
+  const emailInput = document.getElementById("userEmail");
+  if (emailInput) {
+    emailInput.addEventListener("input", () => {
+      const typedEmail = emailInput.value.trim();
+      if (normalizeEmail(typedEmail) !== normalizeEmail(state.email)) {
+        clearResolvedCheckinIdentity(typedEmail);
+        saveStateToLocal();
+      }
+      setWelcomeError("");
+      updateWelcomeIdentityUI();
+    });
+
+    emailInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        verifyCheckinEmail();
+      }
+    });
+  }
+
+  mountFadeIn();
+  bindHistoryNavHandlers();
+  updateWelcomeIdentityUI();
+}
+
+window.validateStart = function () {
+  state.email = el("userEmail")?.value.trim() || "";
+
+  if (!isValidEmail(state.email)) {
+    setWelcomeError("Digite um e-mail válido para consultar o check-in.");
+    updateWelcomeIdentityUI();
+    return;
+  }
+
+  if (state.checkinLookupStatus !== "matched" || !state.name || !state.participantId || !state.checkinUserId) {
+    setWelcomeError("Verifique um e-mail já registrado no check-in antes de começar.");
+    updateWelcomeIdentityUI();
+    return;
+  }
+
+  setWelcomeError("");
+  safeRegisterInit();
+  showPresenceTest();
+};
+
+window.verifyCheckinEmail = async function () {
+  const typedEmail = el("userEmail")?.value.trim() || "";
+
+  if (!isValidEmail(typedEmail)) {
+    setWelcomeError("Digite um e-mail válido para consultar o check-in.");
+    clearResolvedCheckinIdentity(typedEmail);
+    updateWelcomeIdentityUI();
+    return;
+  }
+
+  clearResolvedCheckinIdentity(typedEmail);
+  state.checkinLookupStatus = "loading";
+  state.checkinLookupMessage = "";
+  setWelcomeError("");
+  updateWelcomeIdentityUI();
+
+  const response = await requestCheckinIdentityViaJsonp(typedEmail);
+
+  if (response?.ok && response?.status === "matched") {
+    applyResolvedCheckinIdentity(response);
+    saveStateToLocal();
+    updateWelcomeIdentityUI();
+    const startBtn = el("startJourneyBtn");
+    if (startBtn) startBtn.focus();
+    return;
+  }
+
+  clearResolvedCheckinIdentity(typedEmail);
+  state.checkinLookupStatus =
+    response?.status === "ambiguous"
+      ? "ambiguous"
+      : response?.status === "unmatched"
+        ? "unmatched"
+        : "error";
+  state.checkinLookupMessage = String(response?.error || "");
+  saveStateToLocal();
+  updateWelcomeIdentityUI();
 };
 
 // init

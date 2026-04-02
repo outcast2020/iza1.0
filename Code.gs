@@ -242,6 +242,9 @@ function doGet(e) {
   if (action === "gift") {
     return handleGiftLookup_(e);
   }
+  if (action === "checkin_lookup") {
+    return handleCheckinLookup_(e);
+  }
 
   return ContentService
     .createTextOutput("IZA webapp ok")
@@ -259,13 +262,12 @@ function doPost(e) {
     var stage = String(data.stage || "").trim().toLowerCase();
     var appVariant = String(data.appVariant || getProjectVariant_()).trim() || DEFAULT_PROJECT_VARIANT;
 
-    var escritor = data.escritor || data.name || "";
-    var email = data.email || "";
-    var municipio = data.municipio || data.city || "";
+    var escritorRaw = String(data.escritor || data.name || "").trim();
+    var email = String(data.email || "").trim();
+    var municipioRaw = String(data.municipio || data.city || "").trim();
     var estadoRaw = data.estado || data.state || data.stateUF || "";
     var origemRaw = data.origem || data.source || "";
-    var estadoNorm = normalizeUFOrInternational_(estadoRaw);
-    var origemNorm = normalizeOrigem_(origemRaw);
+    var teacherGroup = String(data.teacherGroup || data.cohort || data.workshop || "").trim();
     var trilha = data.trilha || data.trackKey || "";
     var personalidade = data.personalidade || data.presenceName || data.presenceKey || "";
     var startedAtISO = String(data.startedAtISO || "").trim();
@@ -297,13 +299,20 @@ function doPost(e) {
     var turnsJson = safeJsonStringify_(Array.isArray(data.turns) ? data.turns : null);
 
     var checkinMatch = resolveCheckinMatch_({
-      name: escritor,
+      name: escritorRaw,
       email: email,
-      municipio: municipio,
-      estado: estadoNorm,
-      origem: origemNorm,
-      cohort: data.cohort || data.workshop || data.teacherGroup || ""
+      municipio: municipioRaw,
+      estado: estadoRaw,
+      origem: origemRaw,
+      cohort: teacherGroup
     });
+
+    var escritor = String(escritorRaw || checkinMatch.name || "").trim();
+    email = String(email || checkinMatch.email || "").trim();
+    var municipio = String(municipioRaw || checkinMatch.city || "").trim();
+    var estadoNorm = normalizeUFOrInternational_(estadoRaw || checkinMatch.estado || "");
+    var origemNorm = normalizeOrigem_(origemRaw || checkinMatch.origem || (checkinMatch.status === "matched" ? "Oficina Cordel 2.0" : ""));
+    teacherGroup = String(teacherGroup || checkinMatch.teacherGroup || "").trim();
 
     var participantId = String(data.participantId || buildParticipantId_({
       name: escritor,
@@ -326,6 +335,7 @@ function doPost(e) {
       municipio: municipio,
       estado: estadoNorm,
       origem: origemNorm,
+      teacherGroup: teacherGroup,
       trilha: trilha,
       personalidade: personalidade,
       journeySummary: journeySummary,
@@ -480,6 +490,58 @@ function handleGiftLookup_(e) {
   return ContentService
     .createTextOutput(callback + "(" + payload + ");")
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function handleCheckinLookup_(e) {
+  var callback = sanitizeJsonpCallback_((e && e.parameter && e.parameter.callback) || "");
+  var payload = JSON.stringify(buildCheckinLookupResult_({
+    email: (e && e.parameter && e.parameter.email) || ""
+  }));
+
+  return ContentService
+    .createTextOutput(callback + "(" + payload + ");")
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function buildCheckinLookupResult_(input) {
+  var email = normalizeEmail_(input && input.email);
+  if (!email || email.indexOf("@") === -1) {
+    return {
+      ok: false,
+      status: "error",
+      error: "invalid_email"
+    };
+  }
+
+  var match = resolveCheckinMatch_({ email: email });
+  if (match.status !== "matched") {
+    return {
+      ok: false,
+      status: match.status || "unmatched",
+      error: match.status === "ambiguous" ? "ambiguous_email" : "email_not_found"
+    };
+  }
+
+  return {
+    ok: true,
+    status: "matched",
+    email: match.email || email,
+    name: match.name || "",
+    municipio: match.city || "",
+    estado: match.estado || "",
+    origem: normalizeOrigem_(match.origem || "Oficina Cordel 2.0"),
+    teacherGroup: match.teacherGroup || "",
+    checkinUserId: match.checkinUserId || "",
+    matchMethod: match.method || "email",
+    participantId: buildParticipantId_({
+      email: match.email || email,
+      name: match.name || "",
+      municipio: match.city || "",
+      estado: match.estado || "",
+      origem: match.origem || "Oficina Cordel 2.0",
+      checkinMatch: match
+    })
+  };
 }
 
 function buildGiftLookupResult_(input) {
@@ -977,6 +1039,8 @@ function extractCheckinRecord_(headerMap, row, rowNumber) {
   var name = readRowValueByHeaders_(headerMap, row, ["NOME", "NOME COMPLETO", "NOME DO ALUNO", "ESCRITOR/A"]);
   var city = readRowValueByHeaders_(headerMap, row, ["MUNICIPIO", "CIDADE", "CITY"]);
   var cohort = readRowValueByHeaders_(headerMap, row, ["COORTE", "COHORT", "TURMA", "OFICINA", "WORKSHOP", "GRUPO"]);
+  var estado = readRowValueByHeaders_(headerMap, row, ["ESTADO", "UF", "STATE"]);
+  var origem = readRowValueByHeaders_(headerMap, row, ["ORIGEM", "FONTE", "SOURCE", "TIPO"]);
   var rawId = readRowValueByHeaders_(headerMap, row, ["CHECKIN_USER_ID", "USER_ID", "ID", "IDENTIFICADOR", "INSCRICAO", "MATRICULA"]);
   return {
     rowNumber: rowNumber,
@@ -988,7 +1052,10 @@ function extractCheckinRecord_(headerMap, row, rowNumber) {
     city: city,
     cityNorm: normalizeLooseText_(city),
     cohort: cohort,
-    cohortNorm: normalizeLooseText_(cohort)
+    cohortNorm: normalizeLooseText_(cohort),
+    estado: estado,
+    origem: origem,
+    teacherGroup: cohort
   };
 }
 
@@ -1003,7 +1070,13 @@ function buildCheckinMatchResult_(matches, method) {
     status: "matched",
     method: method,
     checkinUserId: matches[0].checkinUserId,
-    rowNumber: matches[0].rowNumber
+    rowNumber: matches[0].rowNumber,
+    name: matches[0].name || "",
+    email: matches[0].email || "",
+    city: matches[0].city || "",
+    estado: matches[0].estado || "",
+    origem: matches[0].origem || "",
+    teacherGroup: matches[0].teacherGroup || ""
   };
 }
 
@@ -1063,6 +1136,7 @@ function upsertParticipantRegistry_(base, extra) {
   safeSetByHeader_(sheet, row, headerMap, "municipio", base.municipio || "");
   safeSetByHeader_(sheet, row, headerMap, "estado", base.estado || "");
   safeSetByHeader_(sheet, row, headerMap, "origem", base.origem || "");
+  safeSetByHeader_(sheet, row, headerMap, "teacher_group", base.teacherGroup || "");
 
   var existingFirst = getCellValueByHeader_(sheet, row, headerMap, "first_session_at");
   safeSetByHeader_(sheet, row, headerMap, "first_session_at", existingFirst || firstSession || "");
