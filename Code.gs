@@ -671,6 +671,120 @@ function debugCheckinSheetInfo() {
   }, null, 2);
 }
 
+function debugRegistryStatus() {
+  return JSON.stringify({
+    ok: true,
+    records_flat: getSheetRowStatus_(getRecordsSheet_()),
+    participants: getSheetRowStatus_(getParticipantsSheet_()),
+    sessions: getSheetRowStatus_(getSessionsSheet_()),
+    session_indicators: getSheetRowStatus_(getSessionIndicatorsSheet_()),
+    repair_events: getSheetRowStatus_(getRepairEventsSheet_())
+  }, null, 2);
+}
+
+function debugWriteSmokeTest() {
+  var sessionId = "iza-editor-test-" + new Date().getTime();
+  var startedAt = new Date().toISOString();
+  var base = {
+    appVariant: "iza1.0",
+    sessionId: sessionId,
+    escritor: "TESTE EDITOR IZA1",
+    name: "TESTE EDITOR IZA1",
+    email: "editor.test.iza1@example.com",
+    municipio: "Salvador",
+    city: "Salvador",
+    estado: "BA",
+    stateUF: "BA",
+    origem: "Particular",
+    source: "Particular",
+    trilha: "iniciante",
+    trackKey: "iniciante",
+    personalidade: "IZA Calorosa",
+    presenceName: "IZA Calorosa",
+    presenceKey: "A"
+  };
+
+  var turns = [
+    {
+      role: "user",
+      text: "A rua encolheu quando o portao fez um barulho de despedida.",
+      meta: { t: startedAt, stepKey: "cena", validation: "ok" }
+    },
+    {
+      role: "iza",
+      text: "Segura essa imagem e deixa ela abrir mais um pouco.",
+      meta: { t: startedAt, stepKey: "cena", validation: "accepted" }
+    },
+    {
+      role: "user",
+      text: "No ferro do cadeado, a casa aprendeu a ficar vazia.",
+      meta: { t: startedAt, stepKey: "frase_final", validation: "ok" }
+    }
+  ];
+
+  var initPayload = extendObject_(base, { stage: "init" });
+  var choicePayload = extendObject_(base, { stage: "choice" });
+  var finalPayload = extendObject_(base, {
+    stage: "final",
+    startedAtISO: startedAt,
+    endedAtISO: new Date().toISOString(),
+    finalDraft: "No ferro do cadeado, a casa aprendeu a ficar vazia.",
+    journeySummary: "Teste interno do editor para verificar escrita nas abas estruturadas.",
+    summary: "Teste interno do editor para verificar escrita nas abas estruturadas.",
+    keywords: ["rua", "portao", "cadeado", "despedida"],
+    keywordText: "rua, portao, cadeado, despedida",
+    transcript: "VOCE:\nA rua encolheu quando o portao fez um barulho de despedida.\n\nIZA:\nSegura essa imagem e deixa ela abrir mais um pouco.\n\nVOCE:\nNo ferro do cadeado, a casa aprendeu a ficar vazia.",
+    escritos: "VOCE:\nA rua encolheu quando o portao fez um barulho de despedida.\n\nIZA:\nSegura essa imagem e deixa ela abrir mais um pouco.\n\nVOCE:\nNo ferro do cadeado, a casa aprendeu a ficar vazia.",
+    turns: turns,
+    journeyRubric: {
+      total: 9,
+      max: 12,
+      items: {
+        fidelidadeAoPasso: { score: 2, max: 2, note: "debug" },
+        concretude: { score: 2, max: 2, note: "debug" },
+        retencaoSemantica: { score: 2, max: 2, note: "debug" },
+        qualidadeDaPergunta: { score: 1, max: 2, note: "debug" },
+        qualidadeDoFechamento: { score: 1, max: 2, note: "debug" },
+        qualidadeDaSinteseFinal: { score: 1, max: 2, note: "debug" }
+      }
+    },
+    doneChecklist: {
+      fraseFinalMaisForte: { ok: true, note: "debug" },
+      naoAbandonouPasso: { ok: true, note: "debug" },
+      sinteseRefleteTema: { ok: true, note: "debug" }
+    }
+  });
+
+  doPost(buildMockPostEvent_(initPayload));
+  doPost(buildMockPostEvent_(choicePayload));
+  doPost(buildMockPostEvent_(finalPayload));
+
+  return JSON.stringify({
+    ok: true,
+    sessionId: sessionId,
+    status: JSON.parse(debugRegistryStatus())
+  }, null, 2);
+}
+
+function buildMockPostEvent_(payload) {
+  return {
+    postData: {
+      contents: JSON.stringify(payload)
+    }
+  };
+}
+
+function getSheetRowStatus_(sheet) {
+  if (!sheet) {
+    return { found: false, rows: 0, name: "" };
+  }
+  return {
+    found: true,
+    name: sheet.getName(),
+    rows: sheet.getLastRow()
+  };
+}
+
 function getPoemsSheet_() {
   var props = PropertiesService.getScriptProperties();
   var spreadsheetId = String(props.getProperty("IZA_POEMS_SPREADSHEET_ID") || DEFAULT_POEMS_SPREADSHEET_ID).trim();
@@ -1068,9 +1182,16 @@ function findRowByColumnValue_(sheet, headerMap, header, value) {
 }
 
 function appendBlankRowForHeaders_(sheet, headers) {
-  var row = buildBlankRow_(Math.max(sheet.getLastColumn(), headers.length));
-  sheet.appendRow(row);
-  return sheet.getLastRow();
+  var width = Math.max(sheet.getLastColumn(), headers.length);
+  if (sheet.getMaxColumns() < width) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
+  }
+  var rowNumber = Math.max(sheet.getLastRow(), 1) + 1;
+  var rowsToAdd = rowNumber - sheet.getMaxRows();
+  if (rowsToAdd > 0) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), rowsToAdd);
+  }
+  return rowNumber;
 }
 
 function getCellValueByHeader_(sheet, row, headerMap, header) {
