@@ -734,20 +734,24 @@ function getProjectVariant_() {
 function debugCheckinSheetInfo() {
   var sheet = getCheckinSheet_();
   if (!sheet) {
-    return JSON.stringify({ ok: false, error: "checkin_sheet_not_found" }, null, 2);
+    var missingOutput = JSON.stringify({ ok: false, error: "checkin_sheet_not_found" }, null, 2);
+    Logger.log(missingOutput);
+    return missingOutput;
   }
   var lastColumn = Math.max(sheet.getLastColumn(), 1);
   var headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
-  return JSON.stringify({
+  var output = JSON.stringify({
     ok: true,
     spreadsheetId: sheet.getParent().getId(),
     sheetName: sheet.getName(),
     headers: headers
   }, null, 2);
+  Logger.log(output);
+  return output;
 }
 
 function debugRegistryStatus() {
-  return JSON.stringify({
+  var output = JSON.stringify({
     ok: true,
     records_flat: getSheetRowStatus_(getRecordsSheet_()),
     participants: getSheetRowStatus_(getParticipantsSheet_()),
@@ -755,6 +759,8 @@ function debugRegistryStatus() {
     session_indicators: getSheetRowStatus_(getSessionIndicatorsSheet_()),
     repair_events: getSheetRowStatus_(getRepairEventsSheet_())
   }, null, 2);
+  Logger.log(output);
+  return output;
 }
 
 function debugWriteSmokeTest() {
@@ -834,11 +840,24 @@ function debugWriteSmokeTest() {
   doPost(buildMockPostEvent_(choicePayload));
   doPost(buildMockPostEvent_(finalPayload));
 
-  return JSON.stringify({
+  var output = JSON.stringify({
     ok: true,
     sessionId: sessionId,
     status: JSON.parse(debugRegistryStatus())
   }, null, 2);
+  Logger.log(output);
+  return output;
+}
+
+function debugCheckinLookupByEmail() {
+  var email = String(PropertiesService.getScriptProperties().getProperty("IZA_DEBUG_CHECKIN_EMAIL") || "").trim();
+  var output = JSON.stringify({
+    ok: !!email,
+    email: email,
+    result: email ? buildCheckinLookupResult_({ email: email }) : { ok: false, error: "missing_IZA_DEBUG_CHECKIN_EMAIL" }
+  }, null, 2);
+  Logger.log(output);
+  return output;
 }
 
 function buildMockPostEvent_(payload) {
