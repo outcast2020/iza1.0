@@ -1246,16 +1246,25 @@ function syncRepairEventsRegistry_(base, turns) {
 
   var headerMap = ensureHeaders_(sheet, REPAIR_EVENTS_HEADERS);
   var repairTurns = turns.filter(function (turn) {
+    var validation = String(turn && turn.meta && turn.meta.validation || "");
     return turn &&
       turn.role === "user" &&
       turn.meta &&
-      String(turn.meta.validation || "") === "repair_needed";
+      (
+        validation === "repair_needed" ||
+        (validation === "soft_ok" && !!turn.meta.autoAdvanced)
+      );
   });
 
   for (var i = 0; i < repairTurns.length; i++) {
     var turn = repairTurns[i];
+    var validation = String(turn.meta.validation || "");
+    var eventType = validation === "repair_needed"
+      ? "repair_needed"
+      : "auto_advance_after_repairs";
     var eventId = buildStableId_("repair", [
       base.sessionId,
+      eventType,
       String(turn.meta.stepKey || turn.meta.step || i),
       String(turn.text || "")
     ]);
@@ -1266,8 +1275,18 @@ function syncRepairEventsRegistry_(base, turns) {
     safeSetByHeader_(sheet, row, headerMap, "session_id", base.sessionId);
     safeSetByHeader_(sheet, row, headerMap, "participant_id", base.participantId || "");
     safeSetByHeader_(sheet, row, headerMap, "step_key", String(turn.meta.stepKey || turn.meta.step || ""));
-    safeSetByHeader_(sheet, row, headerMap, "event_type", "repair_needed");
-    safeSetByHeader_(sheet, row, headerMap, "reason", String(turn.meta.reason || "validation_repair"));
+    safeSetByHeader_(sheet, row, headerMap, "event_type", eventType);
+    safeSetByHeader_(
+      sheet,
+      row,
+      headerMap,
+      "reason",
+      String(
+        turn.meta.reason ||
+        turn.meta.advancePolicy ||
+        (eventType === "repair_needed" ? "validation_repair" : "auto_advance_after_repairs")
+      )
+    );
     safeSetByHeader_(sheet, row, headerMap, "user_text_excerpt", clipPlainText_(turn.text || "", 380));
     safeSetByHeader_(sheet, row, headerMap, "created_at", String(turn.meta.t || ""));
   }

@@ -27,6 +27,7 @@ const APP_VARIANT = "iza1.0";
 
 const MIN_INSPIRED_ROUNDS = 7;
 const GIFT_LOOKUP_TIMEOUT_MS = 45000;
+const MAX_STEP_REPAIR_ATTEMPTS = 3;
 
 // -------------------- STATE --------------------
 const state = {
@@ -2135,20 +2136,67 @@ function countTextLines(text) {
 function detectSceneSignals(text) {
   const normalized = normalizeSearchText(text);
   const raw = String(text || "");
-  const hasPlace = /\b(?:na|no|numa|num|em|entre|diante|sob|sobre|perto|longe|rua|casa|quarto|sala|cozinha|janela|porta|escola|cidade|bairro|praca|ponte|praia|rio|bar|mercado|onibus|hospital|trabalho|floresta|quintal|fazenda|igreja|corredor|mesa|amazonia|antartida)\b/.test(normalized);
-  const hasAgent = /\b(?:eu|voce|ele|ela|nos|alguem|ninguem|homem|mulher|menino|menina|mae|pai|filho|filha|amigo|amiga|professor|professora|pesquisador|pesquisadora|cientista|vizinho|vizinha|namorado|namorada|artista|medico|medica|agricultor|agricultora|corpo|rosto|mao|olhos)\b/.test(normalized) || /(?:^|\s)[A-Z][a-z]{2,}/.test(raw);
-  const hasGesture = /\b(?:olha|olhou|olhando|ve|viu|vendo|anda|andou|entrou|saiu|ficou|parou|segura|segurou|abre|abriu|fecha|fechou|disse|fala|falou|grita|gritou|cala|calou|respira|respirou|escreve|escreveu|le|leu|toca|tocou|encosta|encostou|corre|correu|senta|sentou|levanta|levantou|chora|chorou|ri|riu|corta|cortou|empurra|empurrou|puxa|puxou|atravessa|atravessou|espera|esperou|treme|tremendo|tremia)\b/.test(normalized);
+  const hasPlace = /\b(?:aqui|ali|la|rua|casa|quarto|sala|cozinha|janela|porta|portao|escola|cidade|bairro|praca|ponte|praia|rio|bar|mercado|onibus|hospital|trabalho|floresta|quintal|fazenda|igreja|corredor|mesa|calcada|escada|viela|laje|muro|varal|ponto|garagem|patio|terraco|rodoviaria|favela|periferia|beco|apartamento|predio|farmacia|esquina)\b/.test(normalized);
+  const hasAgent = /\b(?:eu|voce|ele|ela|nos|alguem|ninguem|homem|mulher|menino|menina|mae|pai|filho|filha|irma|irmao|amigo|amiga|professor|professora|pesquisador|pesquisadora|cientista|vizinho|vizinha|namorado|namorada|artista|medico|medica|agricultor|agricultora|senhora|senhor|crianca|gente|corpo|rosto|mao|olhos)\b/.test(normalized) || /(?:^|\s)[A-Z][a-z]{2,}/.test(raw);
+  const hasGesture = /\b(?:olha|olhou|olhando|ve|viu|vendo|via|anda|andou|entr[aou]|entrou|entrando|saiu|saindo|ficou|ficava|parou|segura|segurou|segurando|abre|abriu|abrindo|fecha|fechou|fechando|disse|diz|fala|falou|falando|grita|gritou|perguntou|respondeu|cala|calou|respira|respirou|escreve|escreveu|le|leu|toca|tocou|encosta|encostou|corre|correu|senta|sentou|levanta|levantou|chora|chorou|ri|riu|corta|cortou|empurra|empurrou|puxa|puxou|atravessa|atravessou|espera|esperou|treme|tremendo|tremia|bate|bateu|batia|ouve|ouvi|ouviu|ouvindo|passa|passou|passando|vira|virou|virando|deixa|deixou|deixando|pega|pegou|pegando|carrega|carregou|carregando)\b/.test(normalized);
+  const hasVerbShape = /\b[a-z]{3,}(?:ou|ava|ia|aram|eram|iam|ando|endo|indo)\b/.test(normalized);
   const hasSpeech = /["""']/.test(raw) || /\b(?:disse|fala|falou|gritou|perguntou|respondeu)\b/.test(normalized);
-  const hasConcreteAnchor = /\b(?:rua|casa|quarto|sala|cozinha|janela|porta|escola|cidade|bairro|praca|ponte|praia|rio|bar|mercado|onibus|hospital|floresta|quintal|fazenda|igreja|corredor|mesa|amazonia|antartida|laje|favela|periferia|viela|muro|paredao|calcada|fogao|corpo|rosto|mao|olhos|varal)\b/.test(normalized);
+  const hasConcreteAnchor = /\b(?:rua|casa|quarto|sala|cozinha|janela|porta|portao|escola|cidade|bairro|praca|ponte|praia|rio|bar|mercado|onibus|hospital|floresta|quintal|fazenda|igreja|corredor|mesa|amazonia|antartida|laje|favela|periferia|viela|muro|paredao|calcada|fogao|corpo|rosto|mao|olhos|varal|escada|garagem|patio|beco|farmacia)\b/.test(normalized);
+  const sceneMarkers = [hasPlace || hasConcreteAnchor, hasAgent, hasGesture || hasSpeech || hasVerbShape].filter(Boolean).length;
   return {
     hasPlace,
     hasAgent,
     hasGesture,
+    hasVerbShape,
     hasSpeech,
     hasConcreteAnchor,
     wordCount: countMeaningfulWords(text),
-    score: [hasPlace, hasAgent, hasGesture].filter(Boolean).length
+    score: sceneMarkers
   };
+}
+
+function countRepairAttemptsForStep(stepKey) {
+  return userTurnsByStepKeys(stepKey)
+    .filter((turn) => turn.meta?.validation === "repair_needed")
+    .length;
+}
+
+function getValidationAttemptNumber(stepKey, validation) {
+  const priorRepairAttempts =
+    Number(validation?.repairAttempts) || countRepairAttemptsForStep(stepKey);
+  return priorRepairAttempts + 1;
+}
+
+function shouldAutoAdvanceValidation(stepKey, validation) {
+  if (!stepKey || !validation || validation.ok) return false;
+  return getValidationAttemptNumber(stepKey, validation) >= MAX_STEP_REPAIR_ATTEMPTS;
+}
+
+function buildAutoAdvanceNote(stepKey, attemptNumber) {
+  const noteByStep = {
+    cena: `Ainda nao virou a cena concreta que eu queria, mas eu nao vou te travar aqui. Registrei que este passo pediu ${attemptNumber} tentativas e seguimos.`,
+    concreto: `Ainda nao apareceu uma imagem concreta o bastante, mas eu nao vou te travar aqui. Registrei que este passo pediu ${attemptNumber} tentativas e seguimos.`,
+    frase_final: `Ainda nao ficou a frase final mais forte possivel, mas eu nao vou te travar aqui. Registrei que este passo pediu ${attemptNumber} tentativas e seguimos para o fechamento.`,
+    forma_final: `Ainda nao ficou a forma final mais nitida possivel, mas eu nao vou te travar aqui. Registrei que este passo pediu ${attemptNumber} tentativas e seguimos para o fechamento.`
+  };
+
+  return noteByStep[stepKey] || `Ainda nao ficou tao nitido quanto eu queria, mas eu nao vou te travar aqui. Registrei que este passo pediu ${attemptNumber} tentativas e seguimos.`;
+}
+
+function buildAutoAdvanceStepReply(track, step, userText, attemptNumber) {
+  const note = buildAutoAdvanceNote(step.key, attemptNumber);
+
+  if (step.key === "frase_final" || step.key === "forma_final") {
+    state.finalDraft = (userText || "").trim();
+    return `${note}\n\n${finalClosureLine()}`;
+  }
+
+  const nextStep = track.steps[state.stepIndex + 1];
+  if (!nextStep) {
+    return `${note}\n\n${finalClosureLine()}`;
+  }
+
+  return `${note}\n\n${resolveStepPrompt(track, nextStep)}`;
 }
 
 function detectContrastSignals(text) {
@@ -2222,14 +2270,20 @@ function validateStepInput(stepKey, text) {
 
   if (stepKey === "cena" || stepKey === "concreto") {
     const scene = detectSceneSignals(text);
+    const repairAttempts = countRepairAttemptsForStep(stepKey);
+    const concreteFrame = scene.hasConcreteAnchor || scene.hasPlace;
+    const actionFrame = scene.hasGesture || scene.hasSpeech || scene.hasVerbShape;
+    const humanFrame = scene.hasAgent;
+    const sceneMarkers = [concreteFrame, actionFrame, humanFrame].filter(Boolean).length;
     const sceneOk =
-      scene.wordCount >= 6 &&
-      scene.hasConcreteAnchor &&
-      (scene.hasGesture || scene.hasSpeech) &&
-      (scene.score >= 2 || (scene.hasAgent && scene.hasSpeech));
+      scene.wordCount >= 4 &&
+      (
+        sceneMarkers >= 2 ||
+        (scene.wordCount >= 7 && (concreteFrame || actionFrame))
+      );
     return sceneOk
-      ? { ok: true, scene }
-      : { ok: false, reason: "scene", scene };
+      ? { ok: true, scene, repairAttempts }
+      : { ok: false, reason: "scene", scene, repairAttempts };
   }
 
   if (stepKey === "contraste") {
@@ -2254,7 +2308,7 @@ function validateStepInput(stepKey, text) {
   return { ok: true };
 }
 
-function buildStepValidationReply(stepKey) {
+function buildStepValidationReply(stepKey, attemptNumber = 1) {
   const p = state.presence || PRESENCES.A;
   const prefix =
     p.key === "D" ? "" :
@@ -2266,8 +2320,8 @@ function buildStepValidationReply(stepKey) {
     centro: "Condense isso em 1 frase-eixo.",
     tipo_centro: "Se quiser, nomeie como pergunta, afirmacao, ferida ou desejo. Se nao, diga em poucas palavras como esse centro se apresenta.",
     atrito: "Nao fique so no rotulo. Nomeie a tensao em duas pontas. Ex.: prazer x obrigacao.",
-    cena: "Ainda esta abstrato. Traga uma cena pequena: diga onde isso acontece, quem esta ali e qual gesto ou fala aparece.",
-    concreto: "Quero ver isso no mundo. Mostre uma cena, uma fala, um gesto ou um lugar.",
+    cena: "Ainda esta abstrato. Traga uma cena pequena: onde isso acontece, quem esta ali e um gesto, fala ou movimento. Ex.: \"na cozinha, minha mae fecha o portao\".",
+    concreto: "Quero ver isso no mundo. Mostre uma cena, uma fala, um gesto ou um lugar. Ex.: \"no onibus, eu aperto o bilhete no bolso\".",
     contraste: "Nomeie claramente as duas forcas em tensao. Ex.: medo x vontade.",
     sintese: "Reuna isso em ate 3 linhas, sem abrir um novo debate.",
     frase_final: "Isso ainda esta mais explicacao do que fecho. Tente uma unica frase que voce sustentaria no final.",
@@ -2275,7 +2329,15 @@ function buildStepValidationReply(stepKey) {
   };
 
   const core = coreByStep[stepKey] || "Tente responder de forma mais nitida.";
-  return prefix ? `${prefix}\n\n${core}` : core;
+  const remainingAttempts = Math.max(0, MAX_STEP_REPAIR_ATTEMPTS - attemptNumber);
+  const attemptHint =
+    remainingAttempts > 1
+      ? "\n\nTenta de novo com uma imagem pequena e precisa."
+      : remainingAttempts === 1
+        ? "\n\nMais uma tentativa. Se ainda travar, eu registro a dificuldade deste passo e sigo com voce."
+        : "";
+
+  return prefix ? `${prefix}\n\n${core}${attemptHint}` : `${core}${attemptHint}`;
 }
 
 function buildCenterChoiceFragment(text) {
@@ -2615,25 +2677,48 @@ function showStep() {
     }
 
     const validation = validateStepInput(step.key, userText);
+    const attemptNumber = getValidationAttemptNumber(step.key, validation);
+    const autoAdvance = shouldAutoAdvanceValidation(step.key, validation);
+    const resolvedAfterRepairs = validation.ok && attemptNumber > 1;
+
     pushTurn("user", userText, {
       stepKey: step.key,
-      validation: validation.ok ? "ok" : "repair_needed"
+      validation: validation.ok ? "ok" : autoAdvance ? "soft_ok" : "repair_needed",
+      reason: validation.reason || "",
+      attemptNumber,
+      repairAttempts: Number(validation.repairAttempts || 0),
+      repairAttemptsBeforeAccept: resolvedAfterRepairs || autoAdvance ? attemptNumber : "",
+      difficultyStep: resolvedAfterRepairs || autoAdvance ? step.key : "",
+      autoAdvanced: autoAdvance,
+      advancePolicy: autoAdvance ? `after_${MAX_STEP_REPAIR_ATTEMPTS}_attempts` : "",
+      sceneScore: typeof validation.scene?.score === "number" ? validation.scene.score : "",
+      sceneWordCount: typeof validation.scene?.wordCount === "number" ? validation.scene.wordCount : ""
     });
 
-    if (!validation.ok) {
-      const repairReply = buildStepValidationReply(step.key);
+    if (!validation.ok && !autoAdvance) {
+      const repairReply = buildStepValidationReply(step.key, attemptNumber);
       pushTurn("iza", repairReply, {
         stepKey: step.key,
-        validation: "repair"
+        validation: "repair",
+        attemptNumber,
+        attemptsRemaining: Math.max(0, MAX_STEP_REPAIR_ATTEMPTS - attemptNumber),
+        reason: validation.reason || ""
       });
       showIza(repairReply, () => showStep());
       return;
     }
 
-    const reply = step.onUser(userText);
+    const reply = autoAdvance
+      ? buildAutoAdvanceStepReply(track, step, userText, attemptNumber)
+      : step.onUser(userText);
     pushTurn("iza", reply, {
       stepKey: step.key,
-      validation: "accepted"
+      validation: autoAdvance || resolvedAfterRepairs ? "accepted_after_repairs" : "accepted",
+      repairAttemptsBeforeAccept: resolvedAfterRepairs || autoAdvance ? attemptNumber : "",
+      difficultyStep: resolvedAfterRepairs || autoAdvance ? step.key : "",
+      autoAdvanced: autoAdvance,
+      advancePolicy: autoAdvance ? `after_${MAX_STEP_REPAIR_ATTEMPTS}_attempts` : "",
+      reason: autoAdvance ? validation.reason || "" : ""
     });
 
     showIza(reply, () => {
@@ -2911,6 +2996,7 @@ function scoreJourneyTurnWeight(turn, index, total) {
   let weight = 1.15;
 
   if (turn.meta?.validation === "repair_needed") weight *= 0.35;
+  if (turn.meta?.validation === "soft_ok") weight *= 0.72;
   if (stepKey === "cena" || stepKey === "concreto") weight += 1.7;
   else if (stepKey === "sintese") weight += 1.25;
   else if (stepKey === "frase_final" || stepKey === "forma_final") weight += isStrongFinalLine(turn.text) ? 1.45 : 0.55;
